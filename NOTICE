@@ -1,0 +1,13 @@
+lamxfs — third-party attribution
+
+lamxfs vendors the parsing core of:
+
+  xfs-fuse (KhaledEmaraDev/xfuse) — the libxfuse parsing core only
+  License: BSD-2-Clause
+
+The vendored portions retain that license (per-file SPDX headers mark them); new
+lamxfs code is licensed MIT OR Apache-2.0 (see LICENSE-MIT, LICENSE-APACHE).
+
+Scope line: only the `libxfuse` parsing modules are vendored — never the FUSE-server
+layer (fuser/clap/tracing) or the system `libfuse`. The vendored core is a clean-room
+of GPL `xfsprogs`/kernel XFS, not derived from them.
