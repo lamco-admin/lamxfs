@@ -1,13 +1,26 @@
-lamxfs — third-party attribution
+lamxfs
+Copyright 2026 Lamco Development LLC
 
-lamxfs vendors the parsing core of:
+This product is licensed under the terms of the MIT license or the Apache
+License, Version 2.0, at your option (see LICENSE-MIT and LICENSE-APACHE).
 
-  xfs-fuse (KhaledEmaraDev/xfuse) — the libxfuse parsing core only
-  License: BSD-2-Clause
+Clean-room implementation
+-------------------------
+lamxfs is a clean-room implementation written from the public XFS on-disk
+format — the SGI/Red Hat "XFS Algorithms & Data Structures" document and the
+Linux kernel's fs/xfs/libxfs on-disk headers, which document uncopyrightable
+format facts (magic numbers, field offsets, B+tree layouts). No third-party
+filesystem reader source (e.g. xfs-fuse/xfuse, GRUB, or the Linux XFS driver)
+is vendored, copied, or adapted. The on-disk format is a published interface;
+the code that reads it here is original.
 
-The vendored portions retain that license (per-file SPDX headers mark them); new
-lamxfs code is licensed MIT OR Apache-2.0 (see LICENSE-MIT, LICENSE-APACHE).
+Third-party dependencies
+------------------------
+Runtime dependencies are permissively licensed and are not redistributed in
+source form by this crate:
 
-Scope line: only the `libxfuse` parsing modules are vendored — never the FUSE-server
-layer (fuser/clap/tracing) or the system `libfuse`. The vendored core is a clean-room
-of GPL `xfsprogs`/kernel XFS, not derived from them.
+  crc32c   (MIT OR Apache-2.0)  — CRC32C for v5 self-describing-metadata checks
+  log      (MIT OR Apache-2.0)  — optional diagnostics (off by default)
+
+Their license terms are reproduced by the consuming binary's third-party-notice
+aggregation per the usual Rust/Cargo distribution model.

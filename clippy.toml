@@ -4,3 +4,9 @@
 cognitive-complexity-threshold = 25
 too-many-arguments-threshold = 7
 type-complexity-threshold = 250
+
+# unwrap_used / expect_used are denied in library code (the read path must never
+# panic on hostile media) but allowed in tests/fixtures, which assert on
+# known-good inputs.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true

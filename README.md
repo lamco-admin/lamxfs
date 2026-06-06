@@ -2,38 +2,79 @@
 
 [![Crates.io](https://img.shields.io/crates/v/lamxfs.svg)](https://crates.io/crates/lamxfs)
 [![Docs.rs](https://docs.rs/lamxfs/badge.svg)](https://docs.rs/lamxfs)
-[![CI](https://github.com/lamco-admin/lamxfs/actions/workflows/ci.yml/badge.svg)](https://github.com/lamco-admin/lamxfs/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 
-A `no_std` read-only XFS reader for UEFI bootloaders.
+A `no_std`, read-only **XFS** filesystem reader for UEFI bootloaders and other
+pre-OS contexts. Clean-room, memory-safe Rust (`#![forbid(unsafe_code)]`).
 
-> **Early development.** This repository establishes the build, license, CI, and
-> the public API contract. The filesystem implementation is in progress and the
-> crate is **not yet functional** — do not depend on it for production use.
+`lamxfs` exists so a bootloader (LamBoot in particular) can read kernels,
+initrds, and boot configuration directly from XFS `/boot` and `/` partitions —
+the default on RHEL 9, Rocky 9, AlmaLinux 9, Oracle Linux 9, CentOS Stream, and
+Amazon Linux — **without** a GPL UEFI filesystem driver (unsignable under
+Microsoft Secure Boot), without `std`, and without the Linux kernel.
+
+It is the XFS counterpart to `ext4-view` and the Lamco-authored `lambutter`
+(btrfs), with a deliberately matching API so a consumer's filesystem adapter is
+one-for-one across the read-only family.
 
 ## Scope
 
-`lamxfs` reads the XFS v5 on-disk format (superblock, allocation groups, inode B+trees, extents, directories) over a byte source, exposing a read-only volume a
-bootloader can traverse to find a kernel and initramfs. Read-only by
-construction. The motivating target is RHEL, Rocky, AlmaLinux, Oracle Linux and Amazon Linux, where XFS is the default root and boot filesystem.
+Read-only, single data device. There is no write path and no `BlockWrite`
+trait — read-only **by construction**.
 
-## Basis
+Supported on-disk layout (the subset present on stock RHEL-family installs):
 
-It vendors the parsing core of [xfs-fuse](https://github.com/KhaledEmaraDev/xfuse) (its `libxfuse` parsing core only) (BSD-2-Clause) — a clean-room
-reader, not GPL kernel/userspace source. See [`NOTICE`](NOTICE) for attribution.
+| Feature | Status |
+|---|---|
+| XFS v5 (CRC, self-describing metadata) | ✅ (CRC32C verified) |
+| XFS v4 (legacy, no CRC) | ✅ |
+| `NREXT64` (64-bit extent counts) | ✅ |
+| Sparse inodes | ✅ |
+| `ftype` directory entries | ✅ |
+| Reflinks | ✅ read-pass-through (shared bytes read transparently) |
+| `meta_uuid` | ✅ |
+| `bigtime` | ✅ (timestamps not surfaced; layout-compatible) |
+| Shortform / block / leaf / node directories | ✅ |
+| Inline + remote (extent) symlinks | ✅ |
+
+Refused with a typed error (never mis-read): realtime device, external log,
+in-progress mkfs, unknown incompat feature, per-file encryption.
+
+## Usage
+
+```rust
+use lamxfs::{Xfs, Path, BlockRead};
+
+let mut fs = Xfs::open(reader, device_size_bytes)?;       // validates the superblock
+let cfg = fs.read_file(Path::new(b"/boot/loader/entries/rocky.conf"))?;
+let ino = fs.resolve(Path::new(b"/boot/vmlinuz-6.1.0"))?;
+let mut buf = [0u8; 1 << 20];
+let n = fs.read_file_at(&ino, 0, &mut buf)?;              // streaming (PE-loader path)
+for e in fs.read_dir(Path::new(b"/boot"))? { /* … */ }
+```
+
+`read_file` caps its up-front allocation at `MAX_FILE_BYTES` (256 MiB): a hostile
+inode can declare a huge `di_size` while occupying no extents, so the size field
+is never trusted to drive an allocation. `read_file_at` streams into a
+caller-sized buffer and is unaffected.
+
+You implement `BlockRead` (one method, `read_at`) over your device — the same
+shape as `lambutter::BlockRead`.
+
+## Safety & hardening
+
+`#![forbid(unsafe_code)]`. Every on-disk count, offset, and shift is bounds- and
+range-checked before use, so malformed or hostile media yields a typed error
+rather than a panic, out-of-bounds read, or denial-of-boot allocation. Validated
+by fuzzing (`cargo +nightly fuzz run fuzz_open` / `fuzz_walk`).
+
+## Testing
+
+- **Layer A** — synthetic-byte unit tests for each parser (`cargo test`).
+- **Layer B** — oracle tests against real `mkfs.xfs` images (v5+NREXT64, v5
+  without NREXT64, v4 legacy): every file is verified against its kernel-produced
+  SHA-256 (`tests/oracle.rs`; regenerate with `tests/fixtures/regenerate.sh`).
+- **Layer C** — `cargo fuzz` targets over arbitrary and seed-mutated volumes.
 
 ## License
 
-Licensed under either of
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
-- MIT license ([LICENSE-MIT](LICENSE-MIT))
-
-at your option. Vendored upstream portions retain their own terms (see
-[`NOTICE`](NOTICE)).
-
-### Contribution
-
-Unless you explicitly state otherwise, any contribution intentionally submitted
-for inclusion in the work by you shall be dual licensed as above, without any
-additional terms or conditions.
+MIT OR Apache-2.0. Clean-room from the public XFS on-disk format; see `NOTICE`.

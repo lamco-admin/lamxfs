@@ -1,19 +1,21 @@
 # Copyright 2026 Lamco Development LLC
 #
 # Licensed under the Apache License, Version 2.0 <LICENSE-APACHE> or the MIT
-# license <LICENSE-MIT>, at your option. Forked/vendored upstream portions
-# retain their own terms; see NOTICE.
+# license <LICENSE-MIT>, at your option.
+#
+# Clean-room implementation written from the public XFS on-disk format; no
+# third-party filesystem source is vendored. See NOTICE.
 
 [package]
 name = "lamxfs"
-version = "0.0.0"
+version = "0.1.0"
 edition = "2021"
 authors = [
     "Greg Lamberson <greg@lamco.io>",
     "Lamco Development LLC <office@lamco.io>",
 ]
 license = "MIT OR Apache-2.0"
-description = "no_std read-only XFS reader for UEFI bootloaders"
+description = "no_std read-only XFS filesystem reader for UEFI bootloaders"
 repository = "https://github.com/lamco-admin/lamxfs"
 homepage = "https://lamco.ai/products/lamboot/"
 readme = "README.md"
@@ -22,19 +24,29 @@ categories = ["filesystem", "embedded", "no-std"]
 rust-version = "1.85"
 documentation = "https://docs.rs/lamxfs"
 include = [
-    "src/**/*.rs",
-    "README.md",
-    "NOTICE",
-    "CHANGELOG.md",
-    "LICENSE-APACHE",
-    "LICENSE-MIT",
+    "/src/**/*.rs",
+    "/README.md",
+    "/NOTICE",
+    "/CHANGELOG.md",
+    "/LICENSE-APACHE",
+    "/LICENSE-MIT",
 ]
 
 [dependencies]
-# Dependencies are added with the implementation (all permissive, upstream-cleared).
+# CRC32C (Castagnoli / iSCSI polynomial) for v5 self-describing-metadata
+# checksums. The `crc` crate is no_std-clean; CRC_32_ISCSI is the polynomial
+# XFS stores. (`crc32c` is avoided — it needs std for CPU feature detection.)
+crc = { version = "3.2", default-features = false }
+
+[dev-dependencies]
+# Pure-Rust zstd decode for the committed .img.zst fixtures (no C toolchain).
+ruzstd = "0.8"
+# Oracle hashing in the fixture tests.
+sha2 = "0.10"
 
 [features]
 default = []
+# Implement std::error::Error for Error (behavioral no-op otherwise).
 std = []
 
 [package.metadata.docs.rs]
@@ -49,12 +61,38 @@ maintenance = { status = "actively-developed" }
 unsafe_op_in_unsafe_fn = "deny"
 elided_lifetimes_in_paths = "warn"
 unreachable_pub = "warn"
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }
 
 [lints.clippy]
 pedantic = { priority = -1, level = "deny" }
+allow_attributes = "deny"
+
+# Selective allows for false-positive-prone pedantic lints.
 missing_errors_doc = "allow"
 module_name_repetitions = "allow"
 must_use_candidate = "allow"
+
+# Functional lints.
 wildcard_imports = "deny"
-unwrap_used = "warn"
-expect_used = "warn"
+
+# (unwrap_used / expect_used are intentionally not enabled: the library read
+# path is unwrap-free by construction, while the fixture tests assert on
+# known-good inputs where unwrap is the idiomatic, readable choice.)
+
+# lamxfs parses on-disk binary structures: numeric casting between
+# u8/u16/u32/u64/usize is pervasive in any binary parser. Allow casting lints
+# project-wide rather than annotate every read site.
+cast_lossless = "allow"
+cast_possible_truncation = "allow"
+cast_possible_wrap = "allow"
+cast_sign_loss = "allow"
+# Field/var names mirror the on-disk XFS struct names (e.g. `agblklog`,
+# `inopblog`); not ours to rename.
+similar_names = "allow"
+unreadable_literal = "allow"
+# Doc comments reference on-disk XFS field/magic names (sb_rootino, di_size,
+# XSLM, …) in prose; backticking every one is noise.
+doc_markdown = "allow"
+# The Error::token() extractor has arms that each return a same-named binding
+# (`token`) from differently-shaped variants — not mergeable, a false positive.
+match_same_arms = "allow"

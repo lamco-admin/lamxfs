@@ -1,6 +1,13 @@
 /target
 Cargo.lock.bak
 
+# fuzzing: the fuzz_targets source is committed; its build, corpus, and crash
+# artifacts are not (corpus seeds are multi-MB real images).
+/fuzz/target
+/fuzz/corpus
+/fuzz/artifacts
+/fuzz/Cargo.lock
+
 # editor / OS noise
 **/*.rs.bk
 .idea/
