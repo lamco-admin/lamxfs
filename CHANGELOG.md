@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Superblock geometry is checked the way the kernel checks it: sector size and
+- Superblock geometry is checked the way the kernel checks it. Sector size and
   log, inode size and log, and inodes per block must agree.
 - An inode that claims 64-bit extent counts on a filesystem without the
   feature is refused with `inode_nrext64_unsupported`, as the kernel's inode
