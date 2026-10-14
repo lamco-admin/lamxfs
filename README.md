@@ -2,9 +2,16 @@
 
 [![Crates.io](https://img.shields.io/crates/v/lamxfs.svg)](https://crates.io/crates/lamxfs)
 [![Docs.rs](https://docs.rs/lamxfs/badge.svg)](https://docs.rs/lamxfs)
+[![CI](https://github.com/lamco-admin/lamxfs/actions/workflows/ci.yml/badge.svg)](https://github.com/lamco-admin/lamxfs/actions/workflows/ci.yml)
+[![Website](https://img.shields.io/badge/website-lamco.ai-blue.svg)](https://lamco.ai/products/lamboot/)
 
 A `no_std`, read-only **XFS** filesystem reader for UEFI bootloaders and other
 pre-OS contexts. Clean-room, memory-safe Rust (`#![forbid(unsafe_code)]`).
+
+- **Website:** [LamBoot](https://lamco.ai/products/lamboot/), the bootloader lamxfs was written for
+- **Documentation:** [docs.rs/lamxfs](https://docs.rs/lamxfs) and the [LamBoot docs](https://lamco.ai/products/lamboot/docs/)
+- **Repository:** [github.com/lamco-admin/lamxfs](https://github.com/lamco-admin/lamxfs)
+- **Company:** [Lamco Development LLC](https://lamco.ai/)
 
 `lamxfs` exists so a bootloader (LamBoot in particular) can read kernels,
 initrds, and boot configuration directly from XFS `/boot` and `/` partitions —
@@ -45,6 +52,22 @@ external log, in-progress mkfs, unknown incompat feature, per-file encryption.
 A dirty log means Linux didn't unmount the filesystem cleanly; mounting and
 unmounting it once under Linux replays the log.
 
+## Installation
+
+```sh
+cargo add lamxfs
+```
+
+or in `Cargo.toml`:
+
+```toml
+[dependencies]
+lamxfs = "0.1"
+```
+
+The crate is `no_std` with `alloc`. The `std` feature only adds an
+`std::error::Error` impl for `Error`.
+
 ## Usage
 
 ```rust
@@ -83,6 +106,14 @@ by fuzzing (`cargo +nightly fuzz run fuzz_open` / `fuzz_walk`).
   be refused (`tests/oracle.rs`; regenerate with `tests/fixtures/regenerate.sh`).
 - **Layer C** — `cargo fuzz` targets over arbitrary and seed-mutated volumes.
 
+## Contributing
+
+Issues and pull requests are welcome at
+[github.com/lamco-admin/lamxfs](https://github.com/lamco-admin/lamxfs). A
+change to the read path should come with a fixture: `tests/fixtures/README.md`
+explains how the images are built.
+
 ## License
 
-MIT OR Apache-2.0. Clean-room from the public XFS on-disk format; see `NOTICE`.
+MIT OR Apache-2.0, copyright Lamco Development LLC. Clean-room from the public
+XFS on-disk format; see `NOTICE`.
