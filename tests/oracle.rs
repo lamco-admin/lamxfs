@@ -29,6 +29,15 @@ fn image(name: &str) -> Vec<u8> {
         "v5_modern" => include_bytes!("fixtures/v5_modern.img.zst"),
         "v5_nonrext64" => include_bytes!("fixtures/v5_nonrext64.img.zst"),
         "v4_legacy" => include_bytes!("fixtures/v4_legacy.img.zst"),
+        "v5_lts618" => include_bytes!("fixtures/v5_lts618.img.zst"),
+        "v5_metadir" => include_bytes!("fixtures/v5_metadir.img.zst"),
+        "v5_bs64k" => include_bytes!("fixtures/v5_bs64k.img.zst"),
+        "v5_sect8k" => include_bytes!("fixtures/v5_sect8k.img.zst"),
+        "v5_nrext64_upgraded" => include_bytes!("fixtures/v5_nrext64_upgraded.img.zst"),
+        "v5_wrapped_log" => include_bytes!("fixtures/v5_wrapped_log.img.zst"),
+        "v5_dirty_log" => include_bytes!("fixtures/v5_dirty_log.img.zst"),
+        "v5_rtgroups_reject" => include_bytes!("fixtures/v5_rtgroups_reject.img.zst"),
+        "v5_zoned_reject" => include_bytes!("fixtures/v5_zoned_reject.img.zst"),
         other => panic!("unknown fixture {other}"),
     };
     let mut dec = ruzstd::decoding::StreamingDecoder::new(comp).expect("zstd");
@@ -150,4 +159,70 @@ fn v5_nonrext64() {
 fn v4_legacy() {
     check_manifest("v4_legacy");
     check_structure("v4_legacy");
+}
+
+/// What stock mkfs.xfs makes since xfsprogs 6.18: parent pointers and
+/// exchange-range on, `features_incompat` 0xeb.
+#[test]
+fn v5_lts618() {
+    check_manifest("v5_lts618");
+    check_structure("v5_lts618");
+}
+
+#[test]
+fn v5_metadir() {
+    check_manifest("v5_metadir");
+    check_structure("v5_metadir");
+}
+
+/// 64 KiB blocks of 512-byte inodes, so 128 inodes per block (inopblog 7).
+#[test]
+fn v5_bs64k() {
+    check_manifest("v5_bs64k");
+    check_structure("v5_bs64k");
+}
+
+/// An 8 KiB superblock sector, all of which the v5 CRC covers.
+#[test]
+fn v5_sect8k() {
+    check_manifest("v5_sect8k");
+    check_structure("v5_sect8k");
+}
+
+/// `xfs_repair -c nrext64=1` sets the superblock bit and leaves existing
+/// inodes on 32-bit extent counts; `fragmented-late` was written afterwards
+/// with 64-bit ones. Both have to read back.
+#[test]
+fn v5_nrext64_upgraded() {
+    check_manifest("v5_nrext64_upgraded");
+    check_structure("v5_nrext64_upgraded");
+}
+
+/// A cleanly unmounted log that has wrapped past the end of its ring.
+#[test]
+fn v5_wrapped_log() {
+    check_manifest("v5_wrapped_log");
+    check_structure("v5_wrapped_log");
+}
+
+fn open_err(name: &str) -> &'static str {
+    let data = image(name);
+    let len = data.len() as u64;
+    match Xfs::open(Mem(data), len) {
+        Ok(_) => panic!("{name}: opened"),
+        Err(e) => e.token(),
+    }
+}
+
+/// Shut down without flushing: the log holds transactions a reader can't
+/// replay.
+#[test]
+fn v5_dirty_log_is_refused() {
+    assert_eq!(open_err("v5_dirty_log"), "sb_dirty_log");
+}
+
+#[test]
+fn realtime_layouts_are_refused() {
+    assert_eq!(open_err("v5_rtgroups_reject"), "sb_realtime_device");
+    assert_eq!(open_err("v5_zoned_reject"), "sb_realtime_device");
 }

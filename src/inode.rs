@@ -65,7 +65,15 @@ impl Dinode {
         let format_ = be::u8_at(&raw, format::DI_FORMAT).ok_or(inconsistent("inode_bad_magic"))?;
         let size = be::u64_at(&raw, format::DI_SIZE).ok_or(inconsistent("inode_bad_magic"))?;
 
-        let nextents = if sb.nrext64 {
+        let large_counts = version >= 3
+            && be::u64_at(&raw, format::DI_FLAGS2).ok_or(inconsistent("inode_bad_magic"))?
+                & format::DIFLAG2_NREXT64
+                != 0;
+        // The kernel's inode verifier refuses the same combination.
+        if large_counts && !sb.nrext64 {
+            return Err(inconsistent("inode_nrext64_unsupported"));
+        }
+        let nextents = if large_counts {
             be::u64_at(&raw, format::DI_BIG_NEXTENTS).ok_or(inconsistent("inode_bad_magic"))?
         } else {
             u64::from(be::u32_at(&raw, format::DI_NEXTENTS).ok_or(inconsistent("inode_bad_magic"))?)

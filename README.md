@@ -21,13 +21,16 @@ one-for-one across the read-only family.
 Read-only, single data device. There is no write path and no `BlockWrite`
 trait — read-only **by construction**.
 
-Supported on-disk layout (the subset present on stock RHEL-family installs):
+Supported on-disk layout (what stock `mkfs.xfs` produces, through xfsprogs 7.x):
 
 | Feature | Status |
 |---|---|
 | XFS v5 (CRC, self-describing metadata) | ✅ (CRC32C verified) |
 | XFS v4 (legacy, no CRC) | ✅ |
-| `NREXT64` (64-bit extent counts) | ✅ |
+| `NREXT64` (64-bit extent counts) | ✅ per inode, so a filesystem upgraded with `xfs_repair -c nrext64=1` reads correctly |
+| Parent pointers, exchange-range (`mkfs.xfs` defaults since xfsprogs 6.18) | ✅ |
+| Metadata directory tree (`metadir`) | ✅ without a realtime section |
+| Block sizes to 64 KiB, sector sizes to 32 KiB | ✅ |
 | Sparse inodes | ✅ |
 | `ftype` directory entries | ✅ |
 | Reflinks | ✅ read-pass-through (shared bytes read transparently) |
@@ -36,8 +39,11 @@ Supported on-disk layout (the subset present on stock RHEL-family installs):
 | Shortform / block / leaf / node directories | ✅ |
 | Inline + remote (extent) symlinks | ✅ |
 
-Refused with a typed error (never mis-read): realtime device, external log,
-in-progress mkfs, unknown incompat feature, per-file encryption.
+Refused with a typed error (never mis-read): a log that still needs replay
+(`sb_dirty_log`), realtime device or realtime groups (including zoned),
+external log, in-progress mkfs, unknown incompat feature, per-file encryption.
+A dirty log means Linux didn't unmount the filesystem cleanly; mounting and
+unmounting it once under Linux replays the log.
 
 ## Usage
 
@@ -70,9 +76,11 @@ by fuzzing (`cargo +nightly fuzz run fuzz_open` / `fuzz_walk`).
 ## Testing
 
 - **Layer A** — synthetic-byte unit tests for each parser (`cargo test`).
-- **Layer B** — oracle tests against real `mkfs.xfs` images (v5+NREXT64, v5
-  without NREXT64, v4 legacy): every file is verified against its kernel-produced
-  SHA-256 (`tests/oracle.rs`; regenerate with `tests/fixtures/regenerate.sh`).
+- **Layer B** — oracle tests against real `mkfs.xfs` images (v5 with and
+  without NREXT64, v4 legacy, stock xfsprogs 7.1 defaults, metadir, 64 KiB
+  blocks, 8 KiB sectors, an NREXT64-upgraded filesystem, a wrapped log): every
+  file is verified against its SHA-256, and dirty-log and realtime images must
+  be refused (`tests/oracle.rs`; regenerate with `tests/fixtures/regenerate.sh`).
 - **Layer C** — `cargo fuzz` targets over arbitrary and seed-mutated volumes.
 
 ## License

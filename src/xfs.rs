@@ -5,9 +5,10 @@ use alloc::{vec, vec::Vec};
 use crate::{
     block_read::BlockRead,
     dir,
-    error::{Error, Result},
+    error::{Error, Result, SuperblockReason},
     file, format,
     inode::Dinode,
+    log,
     path::Path,
     resolve,
     superblock::Superblock,
@@ -79,17 +80,32 @@ pub struct Xfs<R: BlockRead> {
 
 impl<R: BlockRead> Xfs<R> {
     /// Open + validate the filesystem. Reads and checks the primary superblock
-    /// (magic, version, geometry, v5 CRC, supported features) and roots the
-    /// handle at `sb_rootino`. `device_size_bytes` is accepted for parity and
-    /// future SB-vs-device sanity checks.
+    /// (magic, version, geometry, v5 CRC, supported features), refuses a log
+    /// that still needs replay, and roots the handle at `sb_rootino`.
+    /// `device_size_bytes` is accepted for parity and future SB-vs-device
+    /// sanity checks.
     pub fn open(mut reader: R, _device_size_bytes: u64) -> Result<Self> {
-        // One sector is ≤ 4 KiB; read that much so a 4 KiB-native SB CRC covers.
-        let mut buf = vec![0u8; 4096];
-        reader.read_at(0, &mut buf).map_err(|_| Error::Io {
+        let io = |_| Error::Io {
             token: "io_sb",
             offset: 0,
-        })?;
+        };
+        // Most sectors are at most 4 KiB. A larger sector (up to the format's
+        // 32 KiB) is read again whole, since the v5 CRC covers all of it.
+        let mut buf = vec![0u8; 4096];
+        reader.read_at(0, &mut buf).map_err(io)?;
+        if let Some(sectsize @ 4097..=32768) = Superblock::sector_size(&buf) {
+            buf = vec![0u8; usize::from(sectsize)];
+            reader.read_at(0, &mut buf).map_err(io)?;
+        }
         let sb = Superblock::parse(&buf)?;
+
+        // Under `cargo fuzz` the verdict is ignored, like the CRC gates, so
+        // mutated images still reach the inode, directory and BMBT parsers; the
+        // log walk itself still runs.
+        let clean = log::is_clean(&mut reader, &sb);
+        if !cfg!(fuzzing) && !clean? {
+            return Err(Error::BadSuperblock(SuperblockReason::DirtyLog));
+        }
         Ok(Xfs { reader, sb })
     }
 

@@ -8,12 +8,13 @@
 //! ## Scope
 //!
 //! Read-only. Single data device. The subset of XFS actually present on `/boot`
-//! and `/` of stock RHEL-family installs: v4 (no-CRC) and v5 (CRC, self-
-//! describing) layouts, `NREXT64` large extent counts, sparse inodes, `ftype`
-//! directory entries, reflinks (transparent read-pass-through), and `meta_uuid`.
-//! Realtime devices, external/dirty logs, and per-file encryption are rejected
-//! with a typed error rather than mis-read. There is no write path and no
-//! `BlockWrite` trait — read-only by construction.
+//! and `/` of stock installs: v4 (no-CRC) and v5 (CRC, self-describing)
+//! layouts, `NREXT64` large extent counts, parent pointers, exchange-range, the
+//! metadata directory tree, sparse inodes, `ftype` directory entries, reflinks
+//! (transparent read-pass-through), and `meta_uuid`. Realtime devices,
+//! external logs, logs that still need replay, and per-file encryption are
+//! rejected with a typed error rather than mis-read. There is no write path and
+//! no `BlockWrite` trait — read-only by construction.
 //!
 //! ## Shape
 //!
@@ -46,6 +47,7 @@ mod error;
 mod file;
 mod format;
 mod inode;
+mod log;
 mod path;
 mod resolve;
 mod superblock;

@@ -25,12 +25,29 @@ pub(crate) const INCOMPAT_META_UUID: u32 = 1 << 2;
 pub(crate) const INCOMPAT_BIGTIME: u32 = 1 << 3;
 pub(crate) const INCOMPAT_NEEDSREPAIR: u32 = 1 << 4;
 pub(crate) const INCOMPAT_NREXT64: u32 = 1 << 5;
+/// Exchange-range (mkfs default since xfsprogs 6.18). It only adds log intent
+/// item types, and a log that still holds items is refused as dirty.
+pub(crate) const INCOMPAT_EXCHRANGE: u32 = 1 << 6;
+/// Parent pointers (mkfs default since xfsprogs 6.18). They are xattrs in the
+/// attr fork, which the read path already steps over via `di_forkoff`.
+pub(crate) const INCOMPAT_PARENT: u32 = 1 << 7;
+/// Metadata directory tree. It moves the quota and realtime metadata inodes
+/// under `sb_metadirino`; the namespace is still rooted at `sb_rootino`, and the
+/// realtime groups it brings are refused with the realtime device.
+pub(crate) const INCOMPAT_METADIR: u32 = 1 << 8;
 /// Incompat bits this reader understands. Any bit outside this set means the
 /// on-disk layout may differ in a way we cannot safely read → reject.
 /// `NEEDSREPAIR` is deliberately excluded: it marks a filesystem that must be
-/// repaired before use.
-pub(crate) const INCOMPAT_SUPPORTED: u32 =
-    INCOMPAT_FTYPE | INCOMPAT_SPINODES | INCOMPAT_META_UUID | INCOMPAT_BIGTIME | INCOMPAT_NREXT64;
+/// repaired before use. ZONED and ZONE_GAPS stay out: both need a realtime
+/// section.
+pub(crate) const INCOMPAT_SUPPORTED: u32 = INCOMPAT_FTYPE
+    | INCOMPAT_SPINODES
+    | INCOMPAT_META_UUID
+    | INCOMPAT_BIGTIME
+    | INCOMPAT_NREXT64
+    | INCOMPAT_EXCHRANGE
+    | INCOMPAT_PARENT
+    | INCOMPAT_METADIR;
 
 // ---- v4 features2 (sb_features2) — the bit relevant to a reader ----
 pub(crate) const FEATURES2_FTYPE: u32 = 0x0000_0200;
@@ -46,13 +63,19 @@ pub(crate) const DI_MAGIC: usize = 0;
 pub(crate) const DI_MODE: usize = 2;
 pub(crate) const DI_VERSION: usize = 4;
 pub(crate) const DI_FORMAT: usize = 5;
-/// 64-bit data-fork extent count when the NREXT64 incompat bit is set. This
+/// 64-bit data-fork extent count of an inode carrying `DIFLAG2_NREXT64`. This
 /// repurposes the offset-24 union (di_v2_pad/di_flushiter / di_v3_pad).
 pub(crate) const DI_BIG_NEXTENTS: usize = 24;
 pub(crate) const DI_SIZE: usize = 56;
-/// 32-bit data-fork extent count for the non-NREXT64 layout.
+/// 32-bit data-fork extent count of every other inode.
 pub(crate) const DI_NEXTENTS: usize = 76;
 pub(crate) const DI_FORKOFF: usize = 82;
+/// `di_flags2` (v3 inodes only).
+pub(crate) const DI_FLAGS2: usize = 120;
+/// The superblock's NREXT64 bit only permits large extent counts; each inode
+/// says for itself which layout it uses. `xfs_repair -c nrext64=1` sets the
+/// superblock bit and leaves every existing inode on the 32-bit layout.
+pub(crate) const DIFLAG2_NREXT64: u64 = 1 << 4;
 
 /// Inode-core size (where the data fork / literal area begins).
 pub(crate) const DINODE_CORE_V3: usize = 176; // v5 inodes (di_version 3)
