@@ -46,11 +46,19 @@ Supported on-disk layout (what stock `mkfs.xfs` produces, through xfsprogs 7.x):
 | Shortform / block / leaf / node directories | ✅ |
 | Inline + remote (extent) symlinks | ✅ |
 
-Refused with a typed error (never mis-read): a log that still needs replay
-(`sb_dirty_log`), realtime device or realtime groups (including zoned),
-external log, in-progress mkfs, unknown incompat feature, per-file encryption.
-A dirty log means Linux didn't unmount the filesystem cleanly; mounting and
-unmounting it once under Linux replays the log.
+A filesystem Linux didn't unmount cleanly (a power cut, a crash) still has
+committed changes in its log. lamxfs replays a v5 log in memory as Linux does
+at mount: it finds the log's head and tail, drops a torn last write the way
+Linux does, and applies the committed buffer, inode and inode-chunk changes
+over the blocks it reads. Nothing is written to the volume.
+
+Refused with a typed error (never mis-read): a log that can't be replayed
+(`sb_dirty_log`: a v4 log, a bmap or exchange-range change the crash left
+unfinished, an unknown log item, a log feature it doesn't know, or a log
+corrupted before its last few records), realtime device or realtime groups
+(including zoned), external log, in-progress mkfs, unknown incompat feature,
+per-file encryption. Mounting and unmounting such a filesystem once under
+Linux replays its log.
 
 ## Installation
 
@@ -94,7 +102,7 @@ shape as `lambutter::BlockRead`.
 `#![forbid(unsafe_code)]`. Every on-disk count, offset, and shift is bounds- and
 range-checked before use, so malformed or hostile media yields a typed error
 rather than a panic, out-of-bounds read, or denial-of-boot allocation. Validated
-by fuzzing (`cargo +nightly fuzz run fuzz_open` / `fuzz_walk`).
+by fuzzing (`cargo +nightly fuzz run fuzz_open` / `fuzz_walk` / `fuzz_replay`).
 
 ## Testing
 
@@ -102,9 +110,14 @@ by fuzzing (`cargo +nightly fuzz run fuzz_open` / `fuzz_walk`).
 - **Layer B** — oracle tests against real `mkfs.xfs` images (v5 with and
   without NREXT64, v4 legacy, stock xfsprogs 7.1 defaults, metadir, 64 KiB
   blocks, 8 KiB sectors, an NREXT64-upgraded filesystem, a wrapped log): every
-  file is verified against its SHA-256, and dirty-log and realtime images must
-  be refused (`tests/oracle.rs`; regenerate with `tests/fixtures/regenerate.sh`).
-- **Layer C** — `cargo fuzz` targets over arbitrary and seed-mutated volumes.
+  file is verified against its SHA-256, and realtime images and a dirty v4 log
+  must be refused. Seven images shut down with their log dirty (a power cut
+  after a sync, an idle power cut, a kernel update, a metadata-heavy workload,
+  a log wrapped past the ring's end, a torn last record, parent pointers and
+  exchange-range) must read back as the whole tree Linux shows after replaying
+  each one (`tests/oracle.rs`; regenerate with `tests/fixtures/regenerate.sh`).
+- **Layer C** — `cargo fuzz` targets over arbitrary and seed-mutated volumes,
+  and over logs replayed on a synthetic volume (`fuzz_replay`).
 
 ## Contributing
 

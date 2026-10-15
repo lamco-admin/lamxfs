@@ -27,5 +27,12 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "fuzz_replay"
+path = "fuzz_targets/fuzz_replay.rs"
+test = false
+doc = false
+bench = false
+
 # Keep the fuzz crate out of the parent (already standalone) workspace.
 [workspace]

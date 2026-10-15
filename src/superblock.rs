@@ -11,6 +11,8 @@ use crate::{
 mod off {
     pub(super) const MAGICNUM: usize = 0;
     pub(super) const BLOCKSIZE: usize = 4;
+    pub(super) const DBLOCKS: usize = 8;
+    pub(super) const FEATURES_LOG_INCOMPAT: usize = 220;
     pub(super) const RBLOCKS: usize = 16;
     pub(super) const UUID: usize = 32;
     pub(super) const LOGSTART: usize = 48;
@@ -43,6 +45,8 @@ const SB_CRC_OFF: usize = off::CRC;
 pub(crate) struct Superblock {
     pub blocksize: u32,
     pub blocklog: u8,
+    /// Data blocks in the volume (`sb_dblocks`).
+    pub dblocks: u64,
     pub agblocks: u32,
     pub agcount: u32,
     pub agblklog: u8,
@@ -53,6 +57,10 @@ pub(crate) struct Superblock {
     pub v5: bool,
     pub ftype: bool,
     pub nrext64: bool,
+    /// `sb_features_incompat` as stored (zero on v4).
+    pub incompat: u32,
+    /// Features the log's contents depend on (`sb_features_log_incompat`).
+    pub log_incompat: u32,
     /// Directory block size in fs-blocks log2 (`sb_dirblklog`).
     pub dirblklog: u8,
     pub uuid: [u8; 16],
@@ -92,6 +100,7 @@ impl Superblock {
 
         let blocksize =
             be::u32_at(sector, off::BLOCKSIZE).ok_or(bad(SuperblockReason::BadGeometry))?;
+        let dblocks = be::u64_at(sector, off::DBLOCKS).ok_or(bad(SuperblockReason::BadGeometry))?;
         let blocklog =
             be::u8_at(sector, off::BLOCKLOG).ok_or(bad(SuperblockReason::BadGeometry))?;
         let inodesize =
@@ -151,30 +160,22 @@ impl Superblock {
             return Err(bad(SuperblockReason::BadGeometry));
         }
 
-        // Refuse layouts the read path cannot honor.
-        if be::u64_at(sector, off::RBLOCKS).ok_or(bad(SuperblockReason::BadGeometry))? != 0 {
-            return Err(bad(SuperblockReason::RealtimeDevice));
-        }
-        let logstart =
-            be::u64_at(sector, off::LOGSTART).ok_or(bad(SuperblockReason::BadGeometry))?;
-        if logstart == 0 {
-            return Err(bad(SuperblockReason::ExternalLog));
-        }
-        let logblocks =
-            be::u32_at(sector, off::LOGBLOCKS).ok_or(bad(SuperblockReason::BadGeometry))?;
-        if logblocks == 0 {
-            return Err(bad(SuperblockReason::BadGeometry));
-        }
-        if be::u8_at(sector, off::INPROGRESS).ok_or(bad(SuperblockReason::BadGeometry))? != 0 {
-            // mkfs did not finish writing this filesystem.
-            return Err(bad(SuperblockReason::BadGeometry));
-        }
-
+        let (logstart, logblocks) = log_geometry(sector)?;
         let (ftype, nrext64) = detect_features(sector, v5, usize::from(sectsize))?;
+        let (incompat, log_incompat) = if v5 {
+            let word = |at| be::u32_at(sector, at).unwrap_or(0);
+            (
+                word(off::FEATURES_INCOMPAT),
+                word(off::FEATURES_LOG_INCOMPAT),
+            )
+        } else {
+            (0, 0)
+        };
 
         Ok(Superblock {
             blocksize,
             blocklog,
+            dblocks,
             agblocks,
             agcount,
             agblklog,
@@ -184,12 +185,19 @@ impl Superblock {
             v5,
             ftype,
             nrext64,
+            incompat,
+            log_incompat,
             dirblklog,
             uuid,
             logstart,
             logblocks,
             fname,
         })
+    }
+
+    /// 64-bit timestamps, which the log stores as one value each.
+    pub(crate) fn bigtime(&self) -> bool {
+        self.incompat & format::INCOMPAT_BIGTIME != 0
     }
 
     /// Volume label (`sb_fname`), trimmed of NUL/space padding. `None` if empty.
@@ -207,6 +215,33 @@ impl Superblock {
         }
     }
 
+    /// The geometry of a default 320 MiB mkfs, as the fixtures use, for the
+    /// replay fuzz target.
+    #[cfg(fuzzing)]
+    pub(crate) fn for_fuzzing(uuid: [u8; 16]) -> Self {
+        Superblock {
+            blocksize: 4096,
+            blocklog: 12,
+            dblocks: 81920,
+            agblocks: 20480,
+            agcount: 4,
+            agblklog: 15,
+            inodesize: 512,
+            inopblog: 3,
+            rootino: 128,
+            v5: true,
+            ftype: true,
+            nrext64: true,
+            incompat: 0x2b,
+            log_incompat: 0,
+            dirblklog: 0,
+            uuid,
+            logstart: 65543,
+            logblocks: 16384,
+            fname: [0; 12],
+        }
+    }
+
     /// A v5 geometry of 4 KiB blocks and one 65536-block AG, with only the log
     /// fields chosen by the caller.
     #[cfg(test)]
@@ -214,6 +249,7 @@ impl Superblock {
         Superblock {
             blocksize: 4096,
             blocklog: 12,
+            dblocks: 65536,
             agblocks: 65536,
             agcount: 1,
             agblklog: 16,
@@ -223,6 +259,8 @@ impl Superblock {
             v5: true,
             ftype: true,
             nrext64: true,
+            incompat: format::INCOMPAT_BIGTIME,
+            log_incompat: 0,
             dirblklog: 0,
             uuid: [0; 16],
             logstart,
@@ -265,6 +303,28 @@ impl Superblock {
 
 /// Determine `(ftype, nrext64)` from the feature fields, verify the v5 CRC, and
 /// reject a needs-repair or unknown-incompat feature set.
+/// Refuse layouts the read path cannot honor, and return where the internal
+/// log is: its first fs-block and its length.
+fn log_geometry(sector: &[u8]) -> Result<(u64, u32)> {
+    let bad = Error::BadSuperblock;
+    if be::u64_at(sector, off::RBLOCKS).ok_or(bad(SuperblockReason::BadGeometry))? != 0 {
+        return Err(bad(SuperblockReason::RealtimeDevice));
+    }
+    let logstart = be::u64_at(sector, off::LOGSTART).ok_or(bad(SuperblockReason::BadGeometry))?;
+    if logstart == 0 {
+        return Err(bad(SuperblockReason::ExternalLog));
+    }
+    let logblocks = be::u32_at(sector, off::LOGBLOCKS).ok_or(bad(SuperblockReason::BadGeometry))?;
+    if logblocks == 0 {
+        return Err(bad(SuperblockReason::BadGeometry));
+    }
+    if be::u8_at(sector, off::INPROGRESS).ok_or(bad(SuperblockReason::BadGeometry))? != 0 {
+        // mkfs did not finish writing this filesystem.
+        return Err(bad(SuperblockReason::BadGeometry));
+    }
+    Ok((logstart, logblocks))
+}
+
 fn detect_features(sector: &[u8], v5: bool, sectsize: usize) -> Result<(bool, bool)> {
     let bad = Error::BadSuperblock;
     if !v5 {

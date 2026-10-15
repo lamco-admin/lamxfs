@@ -5,11 +5,11 @@ use alloc::{vec, vec::Vec};
 use crate::{
     block_read::BlockRead,
     dir,
-    error::{Error, Result, SuperblockReason},
+    error::{Error, Result},
     file, format,
     inode::Dinode,
-    log,
     path::Path,
+    replay::{self, Replayed},
     resolve,
     superblock::Superblock,
 };
@@ -74,14 +74,18 @@ pub struct DirEntry {
 
 /// A mounted, read-only XFS filesystem.
 pub struct Xfs<R: BlockRead> {
-    reader: R,
+    /// The volume, with any blocks a dirty log changes replayed over it.
+    reader: Replayed<R>,
     sb: Superblock,
 }
 
 impl<R: BlockRead> Xfs<R> {
     /// Open + validate the filesystem. Reads and checks the primary superblock
-    /// (magic, version, geometry, v5 CRC, supported features), refuses a log
-    /// that still needs replay, and roots the handle at `sb_rootino`.
+    /// (magic, version, geometry, v5 CRC, supported features), replays a log
+    /// that still holds committed changes into memory (nothing is written to
+    /// the volume), and roots the handle at `sb_rootino`. A log that can't be
+    /// replayed (a v4 filesystem, an unknown log item, a corrupt log) is
+    /// refused with `sb_dirty_log`.
     /// `device_size_bytes` is accepted for parity and future SB-vs-device
     /// sanity checks.
     pub fn open(mut reader: R, _device_size_bytes: u64) -> Result<Self> {
@@ -99,13 +103,25 @@ impl<R: BlockRead> Xfs<R> {
         }
         let sb = Superblock::parse(&buf)?;
 
-        // Under `cargo fuzz` the verdict is ignored, like the CRC gates, so
-        // mutated images still reach the inode, directory and BMBT parsers; the
-        // log walk itself still runs.
-        let clean = log::is_clean(&mut reader, &sb);
-        if !cfg!(fuzzing) && !clean? {
-            return Err(Error::BadSuperblock(SuperblockReason::DirtyLog));
-        }
+        // Under `cargo fuzz` a log that won't replay is passed over, like the
+        // CRC gates, so mutated images still reach the inode, directory and
+        // BMBT parsers; the replay itself still runs.
+        let overlay = match replay::recover(&mut reader, &sb) {
+            Ok(overlay) => overlay,
+            Err(_) if cfg!(fuzzing) => replay::Overlay::default(),
+            Err(e) => return Err(e),
+        };
+        let mut reader = Replayed {
+            inner: reader,
+            overlay,
+        };
+        // A replayed superblock (growfs, a feature change) is the one to use.
+        let sb = if reader.overlay.is_empty() {
+            sb
+        } else {
+            reader.read_at(0, &mut buf).map_err(io)?;
+            Superblock::parse(&buf)?
+        };
         Ok(Xfs { reader, sb })
     }
 

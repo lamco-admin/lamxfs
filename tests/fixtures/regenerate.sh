@@ -16,7 +16,9 @@ MKFS_NEW="${MKFS_NEW:-mkfs.xfs}"
 MAN=MANIFEST
 FILES="boot/vmlinuz-6.1.0-test boot/os-release boot/loader/entries/rocky.conf boot/bigfile boot/sparse boot/fragmented"
 ALL="v5_modern v5_nonrext64 v4_legacy v5_lts618 v5_metadir v5_bs64k v5_sect8k
-     v5_nrext64_upgraded v5_wrapped_log v5_dirty_log v5_rtgroups_reject v5_zoned_reject"
+     v5_nrext64_upgraded v5_wrapped_log v5_dirty_log v5_dirty_churn v5_dirty_idle
+     v5_dirty_kernel_update v5_dirty_wrapped v5_dirty_torn v5_dirty_parent v4_dirty_log
+     v5_rtgroups_reject v5_zoned_reject"
 
 WORK=$(mktemp -d "${TMPDIR:-/var/tmp}/lamxfs-fixtures.XXXXXX")
 M=""
@@ -75,7 +77,9 @@ mkimg() {
 # Shut down a filesystem only when $1 is a loop-backed XFS mount. A failed
 # mount leaves the mount point a plain directory on the host filesystem, and
 # xfs_io's shutdown on that directory takes the host filesystem down
-# (2026-10-14, aibox).
+# (2026-10-14, aibox). With -f as $2 the log is flushed first, so every
+# finished transaction is in it; without, the in-memory log is lost, as in a
+# power cut.
 safe_shutdown() {
   local fstype src
   fstype=$(findmnt -n -o FSTYPE --mountpoint "$1") || { echo "refusing shutdown: $1 is not a mount point" >&2; return 1; }
@@ -83,7 +87,7 @@ safe_shutdown() {
   if [ "$fstype" != xfs ] || [[ "$src" != /dev/loop* ]]; then
     echo "refusing shutdown: $1 is $fstype on $src, not a loop-mounted XFS" >&2; return 1
   fi
-  sudo xfs_io -x -c shutdown "$1"
+  sudo xfs_io -x -c "shutdown ${2:-}" "$1"
 }
 mount_img() { M=$(mktemp -d); sudo mount -o loop "$1" "$M"; }
 unmount_img() { sudo umount "$M"; rmdir "$M"; M=""; }
@@ -125,6 +129,69 @@ finish() { zstd -q -19 -f --rm "$1.img"; }
 # "log tail: T head: H state: <S>". Read whole, since a grep that stops at the
 # first match would SIGPIPE xfs_logprint and fail the pipeline.
 logstate() { xfs_logprint -t "$1.img" 2>/dev/null | grep -o 'log tail.*' || true; }
+
+# recovered_tree NAME: the tree Linux shows once it has replayed NAME's log,
+# taken from a copy, so the image keeps its dirty log. One line per entry,
+# sorted by path: "d PATH", "f PATH SIZE SHA256", "l PATH TARGET", or "o PATH"
+# for devices, FIFOs and sockets.
+recovered_tree() {
+  local name=$1
+  cp --sparse=always "$name.img" "$WORK/recover.img"
+  mount_img "$WORK/recover.img"
+  sudo find "$M" -mindepth 1 -printf '%y %P\n' | while read -r kind path; do
+    case $kind in
+      d) echo "d /$path" ;;
+      f) echo "f /$path $(sudo stat -c %s "$M/$path") $(sudo sha256sum "$M/$path" | cut -d' ' -f1)" ;;
+      l) echo "l /$path $(sudo readlink "$M/$path")" ;;
+      *) echo "o /$path" ;;
+    esac
+  done | LC_ALL=C sort -t' ' -k2,2 > "$name.tree"
+  unmount_img
+  rm -f "$WORK/recover.img"
+}
+
+# Metadata churn for the replay fixtures: new inode chunks, a node-format
+# directory, a large directory freed (its blocks cancelled) and its space
+# reused, local and leaf attribute forks, a reflinked and then written file,
+# a remote symlink, a rename, an unlink, a device and a FIFO, and a file
+# fragmented into a btree fork.
+churn() {
+  sudo bash -s "$1" <<'CHURN'
+set -euo pipefail
+c="$1/churn"
+mkdir -p "$c/keep" "$c/gone"
+for i in $(seq 1 600); do printf 'keep %d\n' "$i" > "$c/keep/k$i"; done
+for i in $(seq 1 1500); do printf 'gone %d\n' "$i" > "$c/gone/g$i"; done
+rm -rf "$c/gone"
+mkdir "$c/again"
+for i in $(seq 1 300); do printf 'again %d\n' "$i" > "$c/again/a$i"; done
+python3 - "$c" <<'PY'
+import os, sys
+c = sys.argv[1]
+os.setxattr(c + "/keep/k1", "user.small", b"x")
+for i in range(60):
+    os.setxattr(c + "/keep/k2", "user.k%d" % i, b"v" * 200)
+PY
+cp --reflink=always "$1/boot/bigfile" "$c/bigfile-reflink"
+printf 'cow' | dd of="$c/bigfile-reflink" bs=1 seek=8192 conv=notrunc status=none
+ln -s "remote-symlink-target-$(printf '%0100d' 7)" "$c/longlink"
+mv "$c/keep/k3" "$c/renamed"
+rm "$c/keep/k4"
+mknod "$c/null" c 1 3
+mkfifo "$c/fifo"
+for i in $(seq 0 59); do
+  printf 'late-%03d' "$i" | dd of="$c/fragmented" bs=4096 count=1 seek=$((i * 2)) conv=notrunc status=none
+done
+CHURN
+}
+
+# dirty_fixture NAME: record a dirty image's state and the tree Linux recovers.
+dirty_fixture() {
+  local name=$1
+  [[ "$(logstate "$name")" == *'<DIRTY>'* ]] || { echo "$name: log not dirty" >&2; exit 1; }
+  recovered_tree "$name"
+  note "$name" "features_incompat=$(incompat "$name") $(logstate "$name")"
+}
 
 # A reject fixture keeps only the first 64 KiB: the reader refuses it from the
 # superblock before reading anything else.
@@ -214,7 +281,8 @@ build_v5_wrapped_log() {
   finish "$name"
 }
 
-# Shut down without flushing, so the unmount writes no unmount record.
+# Shut down without flushing, so the unmount writes no unmount record: the
+# synced files are in the log, the file made after the sync is lost.
 build_v5_dirty_log() {
   local name=v5_dirty_log
   mkimg "$name" 320M mkfs.xfs -q -f
@@ -223,6 +291,150 @@ build_v5_dirty_log() {
   sudo sync -f "$M"
   sudo touch "$M/boot/after-sync"
   safe_shutdown "$M"
+  unmount_img
+  dirty_fixture "$name"
+  finish "$name"
+}
+
+# Every finished transaction of a metadata-heavy workload in the log.
+build_v5_dirty_churn() {
+  local name=v5_dirty_churn
+  mkimg "$name" 320M mkfs.xfs -q -f
+  mount_img "$name.img"
+  copy_in "$STAGE" $FILES
+  churn "$M"
+  safe_shutdown "$M" -f
+  unmount_img
+  dirty_fixture "$name"
+  finish "$name"
+}
+
+# The common power cut: /boot mounted at boot, one small synced write, then
+# idle long enough for the log to be covered, then the power goes.
+build_v5_dirty_idle() {
+  local name=v5_dirty_idle
+  mkimg "$name" 320M mkfs.xfs -q -f
+  mount_img "$name.img"; copy_in "$STAGE" $FILES; unmount_img
+  mount_img "$name.img"
+  echo flag | sudo tee "$M/boot/grubenv" >/dev/null
+  sudo sync -f "$M/boot/grubenv"
+  sleep 120
+  safe_shutdown "$M"
+  unmount_img
+  dirty_fixture "$name"
+  finish "$name"
+}
+
+# A kernel update synced to disk, then the power goes before any metadata
+# reaches its home blocks.
+build_v5_dirty_kernel_update() {
+  local name=v5_dirty_kernel_update
+  mkdir -p "$WORK/update"
+  head -c 14680064 < <(yes 'vmlinuz-6.2-pattern') > "$WORK/update/vmlinuz-6.2"
+  head -c 41943040 < <(yes 'initramfs-6.2-pattern') > "$WORK/update/initramfs-6.2.img"
+  mkimg "$name" 320M mkfs.xfs -q -f
+  mount_img "$name.img"; copy_in "$STAGE" $FILES; unmount_img
+  mount_img "$name.img"
+  sudo cp "$WORK/update/vmlinuz-6.2" "$WORK/update/initramfs-6.2.img" "$M/boot/"
+  printf 'title new\nlinux /vmlinuz-6.2\ninitrd /initramfs-6.2.img\n' | sudo tee "$M/boot/loader/entries/new.conf" >/dev/null
+  sudo rm "$M/boot/vmlinuz-6.1.0-test" "$M/boot/vmlinuz"
+  sudo ln -s vmlinuz-6.2 "$M/boot/vmlinuz"
+  sudo sync -f "$M"
+  safe_shutdown "$M"
+  unmount_img
+  dirty_fixture "$name"
+  finish "$name"
+}
+
+# A dirty log whose live part runs across the end of the ring. The head and
+# tail come from sysfs; churn stops once the head is a cycle ahead of the tail.
+build_v5_dirty_wrapped() {
+  local name=v5_dirty_wrapped tries tail head
+  for tries in 1 2 3 4 5; do
+    TEST_DIR=/nonexistent TEST_DEV=/nonexistent QA_CHECK_FS=1 mkimg "$name" 320M mkfs.xfs -q -f -l size=3075b
+    mount_img "$name.img"
+    copy_in "$STAGE" $FILES
+    sudo bash -s "$M" <<'WRAP' || true
+m=$1
+d=/sys/fs/xfs/$(basename "$(findmnt -n -o SOURCE --mountpoint "$m")")/log
+mkdir -p "$m/churn"
+for i in $(seq 1 400000); do
+  touch "$m/churn/f$((i % 64))"
+  if [ $((i % 16)) = 0 ]; then
+    sync -f "$m"
+    IFS=: read -r hc hb < "$d/log_head_lsn"
+    IFS=: read -r tc tb < "$d/log_tail_lsn"
+    [ "$hc" -gt "$tc" ] && [ "$hc" -ge 2 ] && exit 0
+  fi
+done
+exit 1
+WRAP
+    echo "wrapped-last" | sudo tee "$M/boot/wrapped-last" >/dev/null
+    safe_shutdown "$M" -f
+    unmount_img
+    read -r tail head < <(logstate "$name" | awk '{print $3, $5}')
+    [ "$tail" -gt "$head" ] && break
+    echo "$name: tail $tail head $head did not straddle the end, retrying" >&2
+  done
+  [ "$tail" -gt "$head" ] || { echo "$name: live log never crossed the ring end" >&2; exit 1; }
+  dirty_fixture "$name"
+  finish "$name"
+}
+
+# The churn workload with one byte of the last log record flipped: Linux
+# takes the bad CRC for a torn write, drops that record and recovers the rest.
+build_v5_dirty_torn() {
+  local name=v5_dirty_torn head logstart logdaddr off b
+  mkimg "$name" 320M mkfs.xfs -q -f
+  mount_img "$name.img"
+  copy_in "$STAGE" $FILES
+  churn "$M"
+  echo "torn-last" | sudo tee "$M/boot/torn-last" >/dev/null
+  safe_shutdown "$M" -f
+  unmount_img
+  head=$(logstate "$name" | awk '{print $5}')
+  [ "$head" -gt 0 ] || { echo "$name: head at block 0, no last record to flip" >&2; exit 1; }
+  # sb_logstart is AG-encoded, so let xfs_db turn it into a sector address.
+  logstart=$(xfs_db -r -c 'sb 0' -c 'p logstart' "$name.img" | awk '{print $3}')
+  logdaddr=$(xfs_db -r -c "convert fsblock $logstart daddr" "$name.img" | awk '{print $1}')
+  off=$(((logdaddr + head - 1) * 512 + 100))
+  b=$(od -An -tu1 -j"$off" -N1 "$name.img" | tr -d ' ')
+  printf "\\$(printf %03o $((b ^ 255)))" | dd of="$name.img" bs=1 seek="$off" conv=notrunc status=none
+  dirty_fixture "$name"
+  if grep -q ' /boot/torn-last ' "$name.tree"; then
+    note "$name" "the flipped record did not hold the last file"
+  else
+    note "$name" "the flipped record held /boot/torn-last, which Linux drops"
+  fi
+  finish "$name"
+}
+
+# Stock mkfs since 6.18: parent pointers log attribute intents with every
+# namespace change, and an exchange-range logs its own intents.
+build_v5_dirty_parent() {
+  local name=v5_dirty_parent
+  mkimg "$name" 320M $MKFS_NEW -q -f
+  mount_img "$name.img"
+  copy_in "$STAGE" $FILES
+  churn "$M"
+  sudo cp "$M/boot/os-release" "$M/churn/exchange-a"
+  sudo cp "$M/boot/loader/entries/rocky.conf" "$M/churn/exchange-b"
+  sudo truncate -s 4096 "$M/churn/exchange-a" "$M/churn/exchange-b"
+  sudo xfs_io -c "exchangerange $M/churn/exchange-b" "$M/churn/exchange-a"
+  safe_shutdown "$M" -f
+  unmount_img
+  dirty_fixture "$name"
+  note "$name" "made by $($MKFS_NEW -V)"
+  finish "$name"
+}
+
+# A v4 log that needs replay: lamxfs replays only v5, so this stays refused.
+build_v4_dirty_log() {
+  local name=v4_dirty_log
+  mkimg "$name" 320M mkfs.xfs -q -f -m crc=0
+  mount_img "$name.img"
+  copy_in "$STAGE" $FILES
+  safe_shutdown "$M" -f
   unmount_img
   [[ "$(logstate "$name")" == *'<DIRTY>'* ]] || { echo "$name: log not dirty" >&2; exit 1; }
   note "$name" "$(logstate "$name")"
@@ -251,6 +463,7 @@ touch "$MAN"
 echo "generating fixtures:"
 for name in "$@"; do
   grep -vE "^($name\||# $name )" "$MAN" > "$WORK/man" || true
+  rm -f "$name.tree"
   cat "$WORK/man" > "$MAN"
   "build_$name"
   echo "  $name -> $(du -h "$name.img.zst" | cut -f1)"

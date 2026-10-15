@@ -8,7 +8,12 @@
 
 use crc::{Crc, CRC_32_ISCSI};
 
-const CRC32C: Crc<u32> = Crc::<u32>::new(&CRC_32_ISCSI);
+static CRC32C: Crc<u32> = Crc::<u32>::new(&CRC_32_ISCSI);
+
+/// A running CRC32C for data that arrives in pieces.
+pub(crate) fn digest() -> crc::Digest<'static, u32> {
+    CRC32C.digest()
+}
 
 /// XFS-style CRC32C over `buf`, with the 4-byte field at `crc_off` zeroed.
 /// Returns 0 if `crc_off` is out of range (the caller's bounds check will have

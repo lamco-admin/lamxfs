@@ -11,10 +11,14 @@
 //! and `/` of stock installs: v4 (no-CRC) and v5 (CRC, self-describing)
 //! layouts, `NREXT64` large extent counts, parent pointers, exchange-range, the
 //! metadata directory tree, sparse inodes, `ftype` directory entries, reflinks
-//! (transparent read-pass-through), and `meta_uuid`. Realtime devices,
-//! external logs, logs that still need replay, and per-file encryption are
-//! rejected with a typed error rather than mis-read. There is no write path and
-//! no `BlockWrite` trait — read-only by construction.
+//! (transparent read-pass-through), and `meta_uuid`. A v5 log that still holds
+//! committed changes (a power cut, a crash) is replayed in memory the way Linux
+//! replays it at mount, so reads see what Linux would show; nothing is written
+//! to the volume. Realtime devices, external logs, a log that can't be
+//! replayed (a v4 one, an unfinished file-mapping change, an unknown log item),
+//! and per-file encryption are rejected with a typed error rather than
+//! mis-read. There is no write path and no `BlockWrite` trait — read-only by
+//! construction.
 //!
 //! ## Shape
 //!
@@ -49,6 +53,7 @@ mod format;
 mod inode;
 mod log;
 mod path;
+mod replay;
 mod resolve;
 mod superblock;
 mod symlink;
@@ -58,3 +63,10 @@ pub use block_read::BlockRead;
 pub use error::{Error, Location, SuperblockReason};
 pub use path::Path;
 pub use xfs::{DirEntry, EntryKind, Inode, Metadata, Xfs, MAX_FILE_BYTES};
+
+/// Log replay on a synthetic volume, for the replay fuzz target.
+#[cfg(fuzzing)]
+#[doc(hidden)]
+pub fn fuzz_replay(data: &[u8]) {
+    replay::fuzz(data);
+}

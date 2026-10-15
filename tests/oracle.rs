@@ -3,6 +3,8 @@
 //!
 //! Fixtures are committed `.img.zst` (decompressed in-memory via `ruzstd`); the
 //! Linux XFS driver wrote the bytes, so any divergence is a bug in this reader.
+//! The dirty-log fixtures carry a `.tree` file: the whole tree as Linux showed
+//! it after replaying the log on a copy, which the replayed view must match.
 //! Regenerate with `tests/fixtures/regenerate.sh`.
 
 use std::io::Read;
@@ -36,6 +38,13 @@ fn image(name: &str) -> Vec<u8> {
         "v5_nrext64_upgraded" => include_bytes!("fixtures/v5_nrext64_upgraded.img.zst"),
         "v5_wrapped_log" => include_bytes!("fixtures/v5_wrapped_log.img.zst"),
         "v5_dirty_log" => include_bytes!("fixtures/v5_dirty_log.img.zst"),
+        "v5_dirty_churn" => include_bytes!("fixtures/v5_dirty_churn.img.zst"),
+        "v5_dirty_idle" => include_bytes!("fixtures/v5_dirty_idle.img.zst"),
+        "v5_dirty_kernel_update" => include_bytes!("fixtures/v5_dirty_kernel_update.img.zst"),
+        "v5_dirty_wrapped" => include_bytes!("fixtures/v5_dirty_wrapped.img.zst"),
+        "v5_dirty_torn" => include_bytes!("fixtures/v5_dirty_torn.img.zst"),
+        "v5_dirty_parent" => include_bytes!("fixtures/v5_dirty_parent.img.zst"),
+        "v4_dirty_log" => include_bytes!("fixtures/v4_dirty_log.img.zst"),
         "v5_rtgroups_reject" => include_bytes!("fixtures/v5_rtgroups_reject.img.zst"),
         "v5_zoned_reject" => include_bytes!("fixtures/v5_zoned_reject.img.zst"),
         other => panic!("unknown fixture {other}"),
@@ -214,11 +223,135 @@ fn open_err(name: &str) -> &'static str {
     }
 }
 
-/// Shut down without flushing: the log holds transactions a reader can't
-/// replay.
+fn recovered_tree(name: &str) -> &'static str {
+    match name {
+        "v5_dirty_log" => include_str!("fixtures/v5_dirty_log.tree"),
+        "v5_dirty_churn" => include_str!("fixtures/v5_dirty_churn.tree"),
+        "v5_dirty_idle" => include_str!("fixtures/v5_dirty_idle.tree"),
+        "v5_dirty_kernel_update" => include_str!("fixtures/v5_dirty_kernel_update.tree"),
+        "v5_dirty_wrapped" => include_str!("fixtures/v5_dirty_wrapped.tree"),
+        "v5_dirty_torn" => include_str!("fixtures/v5_dirty_torn.tree"),
+        "v5_dirty_parent" => include_str!("fixtures/v5_dirty_parent.tree"),
+        other => panic!("no recovered tree for {other}"),
+    }
+}
+
+/// Every entry under `dir`, in the `.tree` line format.
+fn walk(fs: &mut Xfs<Mem>, dir: &str, out: &mut Vec<(String, String)>) {
+    let entries = fs
+        .read_dir(Path::new(dir.as_bytes()))
+        .unwrap_or_else(|e| panic!("read_dir {dir}: {e:?}"));
+    for entry in entries {
+        let name = String::from_utf8(entry.name.clone()).expect("utf-8 name");
+        let path = if dir == "/" {
+            format!("/{name}")
+        } else {
+            format!("{dir}/{name}")
+        };
+        let p = Path::new(path.as_bytes());
+        let ino = fs
+            .resolve(p)
+            .unwrap_or_else(|e| panic!("resolve {path}: {e:?}"));
+        let meta = fs
+            .metadata(&ino)
+            .unwrap_or_else(|e| panic!("metadata {path}: {e:?}"));
+        let line = match entry.kind {
+            EntryKind::Directory => {
+                assert!(
+                    meta.is_dir(),
+                    "{path}: directory entry, inode not a directory"
+                );
+                walk(fs, &path, out);
+                format!("d {path}")
+            }
+            EntryKind::Regular => {
+                assert!(meta.is_file(), "{path}: file entry, inode not a file");
+                let data = fs
+                    .read_file(p)
+                    .unwrap_or_else(|e| panic!("read {path}: {e:?}"));
+                assert_eq!(data.len() as u64, meta.size(), "{path}: size");
+                format!("f {path} {} {}", meta.size(), sha_hex(&data))
+            }
+            EntryKind::Symlink => {
+                assert!(meta.is_symlink(), "{path}: link entry, inode not a link");
+                let target = fs
+                    .read_link(p)
+                    .unwrap_or_else(|e| panic!("readlink {path}: {e:?}"));
+                format!(
+                    "l {path} {}",
+                    String::from_utf8(target).expect("utf-8 target")
+                )
+            }
+            EntryKind::Other => format!("o {path}"),
+        };
+        out.push((path, line));
+    }
+}
+
+/// The replayed view of a dirty-log fixture is the tree Linux recovered.
+fn check_recovered_tree(name: &str) {
+    let mut fs = open(name);
+    let mut got = Vec::new();
+    walk(&mut fs, "/", &mut got);
+    got.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+    let got: Vec<&str> = got.iter().map(|(_, line)| line.as_str()).collect();
+    let want: Vec<&str> = recovered_tree(name).lines().collect();
+    for (g, w) in got.iter().zip(&want) {
+        assert_eq!(g, w, "{name}: first difference from the recovered tree");
+    }
+    assert_eq!(got.len(), want.len(), "{name}: entry count");
+}
+
+/// Shut down without flushing after a sync: the synced files come back, the
+/// file made after the sync doesn't.
 #[test]
-fn v5_dirty_log_is_refused() {
-    assert_eq!(open_err("v5_dirty_log"), "sb_dirty_log");
+fn v5_dirty_log_replays() {
+    check_recovered_tree("v5_dirty_log");
+}
+
+/// Directory, attribute, reflink, rename and unlink transactions, freed
+/// blocks reused, new inode chunks and a btree fork, all only in the log.
+#[test]
+fn v5_dirty_churn_replays() {
+    check_recovered_tree("v5_dirty_churn");
+}
+
+/// One synced write at boot, the log covered while idle, then a power cut.
+/// lamxfs 0.1.1 refused this volume.
+#[test]
+fn v5_dirty_idle_replays() {
+    check_recovered_tree("v5_dirty_idle");
+}
+
+/// A kernel update synced to disk whose metadata is only in the log.
+#[test]
+fn v5_dirty_kernel_update_replays() {
+    check_recovered_tree("v5_dirty_kernel_update");
+}
+
+/// A dirty log whose records run across the end of the ring.
+#[test]
+fn v5_dirty_wrapped_replays() {
+    check_recovered_tree("v5_dirty_wrapped");
+}
+
+/// A bad CRC in the last record is a torn write: that record is dropped and
+/// the rest replays, as Linux does.
+#[test]
+fn v5_dirty_torn_replays() {
+    check_recovered_tree("v5_dirty_torn");
+}
+
+/// Parent pointers and exchange-range log intent items replay passes over.
+#[test]
+fn v5_dirty_parent_replays() {
+    check_recovered_tree("v5_dirty_parent");
+}
+
+/// lamxfs replays only v5 logs.
+#[test]
+fn v4_dirty_log_is_refused() {
+    assert_eq!(open_err("v4_dirty_log"), "sb_dirty_log");
 }
 
 #[test]
