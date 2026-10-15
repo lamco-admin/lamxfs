@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `sb_dirty_log` now means the log can't be replayed: a v4 log, a bmap or
+- `sb_dirty_log` now means the log can't be replayed: A v4 log, a bmap or
   exchange-range change the crash left unfinished (Linux completes those after
   replay), an unknown log item or log feature, a log written by a big-endian
   host, or a log corrupted further back than its last eight records.

@@ -48,12 +48,12 @@ Supported on-disk layout (what stock `mkfs.xfs` produces, through xfsprogs 7.x):
 
 A filesystem Linux didn't unmount cleanly (a power cut, a crash) still has
 committed changes in its log. lamxfs replays a v5 log in memory as Linux does
-at mount: it finds the log's head and tail, drops a torn last write the way
+at mount: It finds the log's head and tail, drops a torn last write the way
 Linux does, and applies the committed buffer, inode and inode-chunk changes
 over the blocks it reads. Nothing is written to the volume.
 
-Refused with a typed error (never mis-read): a log that can't be replayed
-(`sb_dirty_log`: a v4 log, a bmap or exchange-range change the crash left
+Refused with a typed error (never mis-read): A log that can't be replayed
+(`sb_dirty_log`: A v4 log, a bmap or exchange-range change the crash left
 unfinished, an unknown log item, a log feature it doesn't know, or a log
 corrupted before its last few records), realtime device or realtime groups
 (including zoned), external log, in-progress mkfs, unknown incompat feature,
