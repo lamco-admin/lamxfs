@@ -72,6 +72,19 @@ mkimg() {
   "$@" "$FX/$name.img" >/dev/null
 }
 
+# Shut down a filesystem only when $1 is a loop-backed XFS mount. A failed
+# mount leaves the mount point a plain directory on the host filesystem, and
+# xfs_io's shutdown on that directory takes the host filesystem down
+# (2026-10-14, aibox).
+safe_shutdown() {
+  local fstype src
+  fstype=$(findmnt -n -o FSTYPE --mountpoint "$1") || { echo "refusing shutdown: $1 is not a mount point" >&2; return 1; }
+  src=$(findmnt -n -o SOURCE --mountpoint "$1")
+  if [ "$fstype" != xfs ] || [[ "$src" != /dev/loop* ]]; then
+    echo "refusing shutdown: $1 is $fstype on $src, not a loop-mounted XFS" >&2; return 1
+  fi
+  sudo xfs_io -x -c shutdown "$1"
+}
 mount_img() { M=$(mktemp -d); sudo mount -o loop "$1" "$M"; }
 unmount_img() { sudo umount "$M"; rmdir "$M"; M=""; }
 
@@ -209,7 +222,7 @@ build_v5_dirty_log() {
   copy_in "$STAGE" $FILES
   sudo sync -f "$M"
   sudo touch "$M/boot/after-sync"
-  sudo xfs_io -x -c shutdown "$M"
+  safe_shutdown "$M"
   unmount_img
   [[ "$(logstate "$name")" == *'<DIRTY>'* ]] || { echo "$name: log not dirty" >&2; exit 1; }
   note "$name" "$(logstate "$name")"
