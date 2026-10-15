@@ -17,6 +17,10 @@ pub(crate) const SYMLINK_MAGIC: u32 = 0x5853_4c4d; // "XSLM" (v5 remote symlink 
 pub(crate) const SB_VERSION_NUMBITS: u16 = 0x000f;
 pub(crate) const SB_VERSION_4: u16 = 4;
 pub(crate) const SB_VERSION_5: u16 = 5;
+/// `XFS_SB_VERSION_BORGBIT`: an ascii-ci filesystem, whose directory names hash
+/// and compare case-insensitively for ASCII (`mkfs.xfs -n version=ci`, v4 or
+/// v5). This reader hashes and compares names exactly.
+pub(crate) const SB_VERSION_BORGBIT: u16 = 0x4000;
 
 // ---- v5 incompat feature bits (sb_features_incompat) ----
 pub(crate) const INCOMPAT_FTYPE: u32 = 1 << 0;

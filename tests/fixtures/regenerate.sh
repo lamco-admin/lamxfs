@@ -18,7 +18,7 @@ FILES="boot/vmlinuz-6.1.0-test boot/os-release boot/loader/entries/rocky.conf bo
 ALL="v5_modern v5_nonrext64 v4_legacy v5_lts618 v5_metadir v5_bs64k v5_sect8k
      v5_nrext64_upgraded v5_wrapped_log v5_dirty_log v5_dirty_churn v5_dirty_idle
      v5_dirty_kernel_update v5_dirty_wrapped v5_dirty_torn v5_dirty_parent v4_dirty_log
-     v5_rtgroups_reject v5_zoned_reject"
+     v5_rtgroups_reject v5_zoned_reject v5_asciici_reject v4_asciici_reject"
 
 WORK=$(mktemp -d "${TMPDIR:-/var/tmp}/lamxfs-fixtures.XXXXXX")
 M=""
@@ -453,6 +453,23 @@ build_v5_zoned_reject() {
   local name=v5_zoned_reject
   mkimg "$name" 1G $MKFS_NEW -q -f -r zoned=1,rgcount=8
   note "$name" "features_incompat=$(incompat "$name") internal zoned realtime section; first 64 KiB only"
+  head_only "$name"; finish "$name"
+}
+
+# ascii-ci (mkfs.xfs -n version=ci, deprecated but still built by xfsprogs
+# 6.13): Names hash and compare case-insensitively, so it's refused from the
+# superblock's BORGBIT.
+build_v5_asciici_reject() {
+  local name=v5_asciici_reject
+  mkimg "$name" 320M mkfs.xfs -q -f -n version=ci
+  note "$name" "versionnum=0x$(od -An -tx1 -j100 -N2 "$name.img" | tr -d ' ') ascii-ci; first 64 KiB only"
+  head_only "$name"; finish "$name"
+}
+
+build_v4_asciici_reject() {
+  local name=v4_asciici_reject
+  mkimg "$name" 320M mkfs.xfs -q -f -m crc=0 -n version=ci
+  note "$name" "versionnum=0x$(od -An -tx1 -j100 -N2 "$name.img" | tr -d ' ') ascii-ci on v4; first 64 KiB only"
   head_only "$name"; finish "$name"
 }
 

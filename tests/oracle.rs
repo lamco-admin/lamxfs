@@ -47,6 +47,8 @@ fn image(name: &str) -> Vec<u8> {
         "v4_dirty_log" => include_bytes!("fixtures/v4_dirty_log.img.zst"),
         "v5_rtgroups_reject" => include_bytes!("fixtures/v5_rtgroups_reject.img.zst"),
         "v5_zoned_reject" => include_bytes!("fixtures/v5_zoned_reject.img.zst"),
+        "v5_asciici_reject" => include_bytes!("fixtures/v5_asciici_reject.img.zst"),
+        "v4_asciici_reject" => include_bytes!("fixtures/v4_asciici_reject.img.zst"),
         other => panic!("unknown fixture {other}"),
     };
     let mut dec = ruzstd::decoding::StreamingDecoder::new(comp).expect("zstd");
@@ -352,6 +354,15 @@ fn v5_dirty_parent_replays() {
 #[test]
 fn v4_dirty_log_is_refused() {
     assert_eq!(open_err("v4_dirty_log"), "sb_dirty_log");
+}
+
+/// ascii-ci folds ASCII case in name hashes and compares; lamxfs compares
+/// exactly, so the filesystem is refused rather than read with names that
+/// could look missing.
+#[test]
+fn ascii_ci_is_refused() {
+    assert_eq!(open_err("v5_asciici_reject"), "feat_ascii_ci");
+    assert_eq!(open_err("v4_asciici_reject"), "feat_ascii_ci");
 }
 
 #[test]

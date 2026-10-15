@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] - 2026-10-15
+
+### Fixed
+
+- **ascii-ci filesystems opened.** `mkfs.xfs -n version=ci` (deprecated, but
+  xfsprogs 6.13 still builds it) hashes and compares directory names
+  case-insensitively for ASCII, and lamxfs looks names up exactly, so a name
+  with capitals could look missing. Such a filesystem (v4 or v5) is refused
+  as `UnsupportedFeature("feat_ascii_ci")`. Two refusal fixtures; 0.1.2
+  opened the filesystem.
+
+### Testing
+
+- A unit test pins that the ZONED and ZONE_GAPS incompat bits are each refused
+  on their own; real zoned filesystems are also refused for their realtime
+  section (`v5_zoned_reject`).
+
 ## [0.1.2] - 2026-10-15
 
 ### Added

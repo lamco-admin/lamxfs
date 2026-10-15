@@ -57,7 +57,8 @@ Refused with a typed error (never mis-read): A log that can't be replayed
 unfinished, an unknown log item, a log feature it doesn't know, or a log
 corrupted before its last few records), realtime device or realtime groups
 (including zoned), external log, in-progress mkfs, unknown incompat feature,
-per-file encryption. Mounting and unmounting such a filesystem once under
+ascii-ci (`feat_ascii_ci`: Names hash and compare case-insensitively there,
+and lamxfs compares them exactly), per-file encryption. Mounting and unmounting such a filesystem once under
 Linux replays its log.
 
 ## Installation

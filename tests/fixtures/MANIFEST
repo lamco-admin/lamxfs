@@ -77,3 +77,5 @@ v5_wrapped_log|/boot/fragmented|1bd41a33ee07e6af6e420be34bddfd940f58b3941bcbce38
 # v5_dirty_idle features_incompat=0x0000002b log tail: 188 head: 192 state: <DIRTY>
 # v5_dirty_torn features_incompat=0x0000002b log tail: 2 head: 1556 state: <DIRTY>
 # v5_dirty_torn the flipped record held /boot/torn-last, which Linux drops
+# v5_asciici_reject versionnum=0xf4a5 ascii-ci; first 64 KiB only
+# v4_asciici_reject versionnum=0xf4a4 ascii-ci on v4; first 64 KiB only

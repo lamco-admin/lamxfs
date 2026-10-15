@@ -97,6 +97,11 @@ impl Superblock {
             v if v == format::SB_VERSION_4 => false,
             _ => return Err(bad(SuperblockReason::UnsupportedVersion)),
         };
+        // Lookups here hash and compare names exactly, so an ascii-ci
+        // filesystem's case-folded names could look missing.
+        if versionnum & format::SB_VERSION_BORGBIT != 0 {
+            return Err(Error::UnsupportedFeature("feat_ascii_ci"));
+        }
 
         let blocksize =
             be::u32_at(sector, off::BLOCKSIZE).ok_or(bad(SuperblockReason::BadGeometry))?;
@@ -381,6 +386,23 @@ mod tests {
         let sb = Superblock::for_log_tests(1, 8);
         assert_eq!(sb.fsblock_byte_offset(1), 4096);
         assert_eq!(sb.inode_byte_offset(128), 16 * 4096);
+    }
+
+    /// ZONED and ZONE_GAPS are outside the supported incompat set, so either
+    /// bit alone is refused, before the CRC is checked. Real zoned filesystems
+    /// are also refused for their realtime section (`v5_zoned_reject`).
+    #[test]
+    fn zoned_and_zone_gaps_bits_are_refused() {
+        for bit in [1u32 << 9, 1 << 10] {
+            let mut sector = alloc::vec![0u8; 512];
+            sector[off::FEATURES_INCOMPAT..off::FEATURES_INCOMPAT + 4]
+                .copy_from_slice(&(format::INCOMPAT_FTYPE | bit).to_be_bytes());
+            assert_eq!(
+                detect_features(&sector, true, 512),
+                Err(Error::UnsupportedFeature("feat_unknown_incompat")),
+                "{bit:#x}"
+            );
+        }
     }
 
     #[test]
