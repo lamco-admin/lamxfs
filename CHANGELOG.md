@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-10-15
+
+### Added
+
+- A v5 log that still holds committed changes is replayed in memory, so a
+  filesystem Linux didn't unmount cleanly reads the way Linux shows it after
+  mounting. 0.1.1 refused every such filesystem with `sb_dirty_log`, including
+  the common case of a `/boot` that was idle when the power went, whose log
+  holds nothing but the superblock updates Linux writes while idle. Replay
+  finds the head and tail, drops a torn last write as Linux does, and applies
+  the committed buffer, inode and inode-chunk changes over the blocks it
+  reads. Nothing is written to the volume, and replay holds at most 128 MiB of
+  log and 128 MiB of changed blocks.
+
+### Changed
+
+- `sb_dirty_log` now means the log can't be replayed: a v4 log, a bmap or
+  exchange-range change the crash left unfinished (Linux completes those after
+  replay), an unknown log item or log feature, a log written by a big-endian
+  host, or a log corrupted further back than its last eight records.
+
 ## [0.1.1] - 2026-10-14
 
 ### Fixed
